@@ -21,6 +21,7 @@ API = "/api/v1"
 
 @pytest.fixture
 def client(tmp_path):
+    """A TestClient for a fresh app whose SQLite database lives in ``tmp_path``."""
     settings = Settings(database_url=f"sqlite:///{tmp_path / 'test.db'}")
     with TestClient(create_app(settings)) as test_client:
         yield test_client
