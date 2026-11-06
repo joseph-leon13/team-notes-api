@@ -1,15 +1,15 @@
-# Local development override: live-reload on source changes.
+# Local development override: apply migrations, then live-reload on source changes.
 #   docker compose -f compose.yaml -f compose.dev.yaml up --build
 services:
   api:
     command:
-      - /app/.venv/bin/uvicorn
-      - team_notes_api.main:create_app
-      - --factory
-      - --host=0.0.0.0
-      - --port=8000
-      - --reload
-      - --reload-dir=/app/src
+      - sh
+      - -c
+      - >-
+        /app/.venv/bin/alembic upgrade head &&
+        exec /app/.venv/bin/uvicorn team_notes_api.main:create_app --factory
+        --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src
     volumes:
       - ./src:/app/src:ro
+      - ./migrations:/app/migrations:ro
     restart: "no"

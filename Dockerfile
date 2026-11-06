@@ -17,8 +17,10 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# 2) Install the application itself
+# 2) Install the application itself, plus the schema migrations
 COPY src ./src
+COPY alembic.ini ./
+COPY migrations ./migrations
 RUN uv sync --frozen --no-dev
 
 # Run as an unprivileged user; SQLite lives on a mountable volume
@@ -30,4 +32,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)"
 
-CMD ["/app/.venv/bin/uvicorn", "team_notes_api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+# Apply pending migrations, then serve. `exec` hands PID 1 to uvicorn so signals work.
+CMD ["sh", "-c", "/app/.venv/bin/alembic upgrade head && exec /app/.venv/bin/uvicorn team_notes_api.main:create_app --factory --host 0.0.0.0 --port 8000"]

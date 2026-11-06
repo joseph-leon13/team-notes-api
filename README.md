@@ -15,10 +15,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # 2. Install dependencies (exact versions from uv.lock)
 uv sync
 
-# 3. Run the API (creates ./notes.db on first start)
+# 3. Create or upgrade the database schema (./notes.db by default)
+uv run alembic upgrade head
+
+# 4. Run the API
 uv run uvicorn team_notes_api.main:create_app --factory --reload
 
-# 4. Run the tests
+# 5. Run the tests
 uv run pytest
 ```
 
@@ -35,6 +38,7 @@ The image:
 - installs the exact versions from `uv.lock`;
 - runs as a non-root user;
 - keeps the SQLite file on the `/data` volume;
+- applies pending migrations on start (`alembic upgrade head`) before serving;
 - has a `HEALTHCHECK` on `/health`.
 
 ### Without uv
@@ -42,6 +46,7 @@ The image:
 ```bash
 python3.12 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt            # generated from uv.lock with `uv export`
+PYTHONPATH=src alembic upgrade head
 PYTHONPATH=src uvicorn team_notes_api.main:create_app --factory
 ```
 
@@ -72,6 +77,21 @@ uv run lint-imports                            # architecture contracts (see bel
 - `api` → `services` → `schemas` / `models`, never upward;
 - `services.policy` stays pure: no database, models or API imports;
 - `models` never import `schemas`.
+
+## Schema migrations
+
+The schema is managed with **Alembic** (`migrations/`). The app never creates tables itself.
+
+```bash
+uv run alembic upgrade head                           # apply migrations
+uv run alembic revision --autogenerate -m "describe"  # after changing a model; review the file
+uv run alembic downgrade -1                           # step back one revision
+```
+
+- `migrations/env.py` reads the same `NOTES_DATABASE_URL` as the app and targets the models' metadata.
+- It runs in SQLite **batch mode**, because SQLite can't `ALTER` most constraints in place.
+- `tests/unit/test_migrations.py` upgrades an empty database to `head` and asserts **no drift** between the migrations and the models. It also round-trips `downgrade base`, then `upgrade head`. A model change without a migration fails the test suite.
+- The test suite itself builds its throwaway databases from the models for speed. The drift test is what keeps that honest.
 
 ## Walkthrough (curl)
 
@@ -160,6 +180,7 @@ src/team_notes_api/
     policy.py        pure role rules (who may edit / delete / manage members)
   models/            SQLAlchemy models: users, teams, memberships, notes, tags
   schemas/           Pydantic request/response models (kept separate from ORM models)
+migrations/          Alembic environment + versioned schema revisions
 tests/               behaviour tests per area + an authorization matrix
 ```
 
@@ -305,12 +326,10 @@ sequenceDiagram
 
 - **Real authentication** (see above).
 - **Real-time collaboration, attachments, note history, per-note sharing outside a team, team deletion, rate limiting.**
-- **Database migrations.** Tables are created on startup.
 
 ## What I'd change or add with more time
 
 - **Real authentication:** OIDC/OAuth or session login behind the same `CurrentUser` seam, plus token expiry and rotation.
-- **Migrations with Alembic** instead of `create_all`.
 - **Postgres in CI.** The code avoids SQLite-specific SQL and the database URL is one setting, so it is portable by construction, but **only SQLite is exercised today**.
 - **Full-text search:** Postgres `tsvector`, or SQLite FTS5 with a query sanitiser, for ranking and better language handling.
 - **Real-time updates:**
