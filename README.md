@@ -382,6 +382,7 @@ The time box went to the core: team isolation, safe concurrent edits and listing
 - **Note history, restore and soft delete.** Deletes are permanent. The `version` counter is the hook a history table would hang off.
 - **Sharing a note outside its team.** Teams are the only sharing boundary, which keeps the authorization model to a single rule.
 - **Team and account management beyond the basics.** There is no endpoint to rename or delete a team, change a member's role, or edit or delete your own user.
+- **A user directory, deliberately.** There is no "list all users" endpoint. You see yourself (`GET /users/me`) and the members of your teams (`GET /teams/{team_id}`), so the service never reveals who else uses it. Members are added by email, so no directory is needed.
 - **Attachments and rich content.** Note bodies are plain text (Markdown works as plain text).
 - **Rate limiting and abuse protection.**
 
