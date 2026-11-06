@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from team_notes_api.db import Base
+from team_notes_api.core.db import Base
 from team_notes_api.models.types import UTCDateTime, utc_now
 
 

@@ -4,9 +4,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from team_notes_api.errors import ConflictError
+from team_notes_api.core.errors import ConflictError
+from team_notes_api.core.security import generate_token, hash_token
 from team_notes_api.models import User
-from team_notes_api.security import generate_token, hash_token
 
 
 def create_user(session: Session, email: str, display_name: str) -> tuple[User, str]:

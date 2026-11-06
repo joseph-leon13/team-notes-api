@@ -1,10 +1,10 @@
 """User registration and bearer-token identity."""
 
+from conftest import API, auth, make_user
 from sqlalchemy import select
 
+from team_notes_api.core.security import hash_token
 from team_notes_api.models import User
-from team_notes_api.security import hash_token
-from tests.helpers import API, auth, register
 
 
 def test_create_user_returns_user_and_token_once(client):
@@ -24,7 +24,7 @@ def test_create_user_returns_user_and_token_once(client):
 
 
 def test_token_is_stored_only_as_its_digest(client):
-    _, token = register(client, "ada@example.com")
+    _, token = make_user(client, "ada@example.com")
 
     with client.app.state.session_factory() as session:
         stored = session.scalars(select(User.token_hash)).one()
@@ -34,7 +34,7 @@ def test_token_is_stored_only_as_its_digest(client):
 
 
 def test_duplicate_email_is_a_conflict_regardless_of_case(client):
-    register(client, "ada@example.com")
+    make_user(client, "ada@example.com")
 
     response = client.post(f"{API}/users", json={"email": "ADA@example.com", "display_name": "X"})
 
@@ -54,8 +54,8 @@ def test_invalid_email_and_unknown_fields_are_rejected(client):
 
 
 def test_me_returns_the_token_owner(client):
-    user, token = register(client, "ada@example.com", "Ada")
-    register(client, "bob@example.com", "Bob")
+    user, token = make_user(client, "ada@example.com", "Ada")
+    make_user(client, "bob@example.com", "Bob")
 
     response = client.get(f"{API}/users/me", headers=auth(token))
 
@@ -72,7 +72,7 @@ def test_me_without_token_is_401_with_bearer_challenge(client):
 
 
 def test_me_with_bad_token_is_401(client):
-    register(client, "ada@example.com")
+    make_user(client, "ada@example.com")
 
     bad_token = client.get(f"{API}/users/me", headers=auth("not-a-real-token"))
     wrong_scheme = client.get(f"{API}/users/me", headers={"Authorization": "Basic abc"})

@@ -2,7 +2,7 @@
 
 from fastapi.testclient import TestClient
 
-from team_notes_api.config import Settings
+from team_notes_api.core.config import Settings
 from team_notes_api.main import create_app
 
 

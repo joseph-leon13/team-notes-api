@@ -6,7 +6,7 @@ from enum import StrEnum
 from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from team_notes_api.db import Base
+from team_notes_api.core.db import Base
 from team_notes_api.models.types import UTCDateTime, utc_now
 from team_notes_api.models.user import User
 

@@ -9,8 +9,8 @@ from typing import Annotated
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from team_notes_api.db import SessionDep
-from team_notes_api.errors import UnauthenticatedError
+from team_notes_api.core.db import SessionDep
+from team_notes_api.core.errors import UnauthenticatedError
 from team_notes_api.models import User
 from team_notes_api.services.users import get_user_by_token
 

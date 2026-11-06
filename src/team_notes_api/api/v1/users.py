@@ -3,7 +3,7 @@
 from fastapi import APIRouter, status
 
 from team_notes_api.api.deps import CurrentUser
-from team_notes_api.db import SessionDep
+from team_notes_api.core.db import SessionDep
 from team_notes_api.schemas.common import Envelope, error_responses
 from team_notes_api.schemas.users import UserCreate, UserCreated, UserOut
 from team_notes_api.services import users as user_service
