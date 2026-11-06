@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from team_notes_api import models  # noqa: F401  (registers tables on Base.metadata)
+from team_notes_api.api.v1 import api_router
 from team_notes_api.config import Settings, get_settings
 from team_notes_api.db import Base, SessionDep, build_engine, build_session_factory
 from team_notes_api.errors import register_error_handlers
@@ -32,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.session_factory = build_session_factory(engine)
     register_error_handlers(app)
+    app.include_router(api_router)
 
     @app.get("/health", tags=["health"], summary="Liveness and database check")
     def health(session: SessionDep) -> dict[str, str]:
