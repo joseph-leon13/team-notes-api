@@ -1,0 +1,18 @@
+# Run the API with Docker Compose:   docker compose up --build
+# Configuration is environment-driven (NOTES_* variables), so the same image serves any
+# environment; only the values below change. See README, "Configuration".
+services:
+  api:
+    build: .
+    image: team-notes-api
+    ports:
+      - "8000:8000"
+    environment:
+      NOTES_DATABASE_URL: sqlite:////data/notes.db
+      NOTES_CORS_ORIGINS: ${NOTES_CORS_ORIGINS:-}
+    volumes:
+      - notes-data:/data
+    restart: unless-stopped
+
+volumes:
+  notes-data:
