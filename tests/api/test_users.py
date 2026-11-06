@@ -1,5 +1,6 @@
 """User registration and bearer-token identity."""
 
+import pytest
 from conftest import API, auth, make_user
 from sqlalchemy import select
 
@@ -81,3 +82,38 @@ def test_me_with_bad_token_is_401(client):
         assert response.status_code == 401
         assert response.headers["www-authenticate"] == "Bearer"
         assert response.json()["error"]["code"] == "unauthenticated"
+
+
+INVALID_EMAILS = ["no-at-sign", "user@", "@example.com", "has space@example.com", "a@b", ""]
+
+
+@pytest.mark.parametrize("email", INVALID_EMAILS)
+def test_invalid_email_is_422_validation_error(client, email):
+    response = client.post(f"{API}/users", json={"email": email, "display_name": "X"})
+
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "validation_error"
+    assert ["body", "email"] in [item["loc"] for item in error["details"]["errors"]]
+
+
+def test_mixed_case_email_is_stored_lower_cased(client):
+    make_user(client, "Grace.Hopper@Navy.MIL")
+
+    with client.app.state.session_factory() as session:
+        stored = session.scalars(select(User.email)).one()
+
+    assert stored == "grace.hopper@navy.mil"
+
+
+def test_email_validation_does_no_dns_lookups(client, monkeypatch):
+    import email_validator.deliverability
+
+    def no_dns(*args, **kwargs):
+        raise AssertionError("email validation must not run deliverability (DNS) checks")
+
+    monkeypatch.setattr(email_validator.deliverability, "validate_email_deliverability", no_dns)
+
+    _, token = make_user(client, "someone@unregistered-domain-for-tests.dev")
+
+    assert token

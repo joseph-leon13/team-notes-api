@@ -2,11 +2,11 @@
 
 from typing import Annotated
 
-from pydantic import BaseModel, StringConstraints, field_validator
+from pydantic import BaseModel, StringConstraints
 
 from team_notes_api.core.roles import Role
 from team_notes_api.schemas.common import RequestModel, UTCTimestamp
-from team_notes_api.schemas.users import EmailStr, normalize_email
+from team_notes_api.schemas.users import NormalizedEmail
 
 TeamName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 
@@ -20,13 +20,8 @@ class TeamCreate(RequestModel):
 class MemberAdd(RequestModel):
     """Body of ``POST /teams/{team_id}/members``: an existing user's email and a role."""
 
-    email: EmailStr
+    email: NormalizedEmail
     role: Role = Role.MEMBER
-
-    @field_validator("email")
-    @classmethod
-    def _normalize_email(cls, value: str) -> str:
-        return normalize_email(value)
 
 
 class TeamOut(BaseModel):

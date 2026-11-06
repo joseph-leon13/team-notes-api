@@ -185,3 +185,22 @@ def test_an_owner_can_leave_when_another_owner_remains(client, people, team):
     assert leave.status_code == 204
     assert last.status_code == 409
     assert last.json()["error"]["code"] == "last_owner"
+
+
+@pytest.mark.parametrize("email", ["no-at-sign", "user@", "has space@example.com"])
+def test_add_member_with_invalid_email_is_422(client, people, team, email):
+    _, owner_token = people["owner"]
+
+    response = add_member(client, owner_token, team["id"], email)
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_add_member_matches_email_case_insensitively(client, people, team):
+    _, owner_token = people["owner"]
+
+    response = add_member(client, owner_token, team["id"], "  OUTSIDER@Example.com ")
+
+    assert response.status_code == 201
+    assert response.json()["data"]["email"] == "outsider@example.com"
