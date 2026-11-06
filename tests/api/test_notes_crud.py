@@ -54,6 +54,24 @@ def test_member_reads_a_note_created_by_the_owner(client, world):
     assert response.json()["data"] == note
 
 
+def test_member_edits_any_note(client, world):
+    _, owner_token = world["owner"]
+    member, member_token = world["member"]
+    note = make_note(client, owner_token, world["team"]["id"], title="Old")
+
+    response = client.patch(
+        f"{API}/notes/{note['id']}",
+        json={"version": 1, "title": "New", "body": "Body"},
+        headers=auth(member_token),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert (data["title"], data["body"], data["version"]) == ("New", "Body", 2)
+    assert data["updated_by_id"] == member["id"]
+    assert data["updated_at"] >= note["updated_at"]
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -78,7 +96,7 @@ def test_invalid_note_payloads_are_422(client, world, payload):
     assert response.json()["error"]["code"] == "validation_error"
 
 
-def test_non_member_gets_404_on_get_and_delete(client, world):
+def test_non_member_gets_404_on_get_patch_and_delete(client, world):
     _, owner_token = world["owner"]
     outsider = auth(world["outsider_token"])
     note = make_note(client, owner_token, world["team"]["id"])
@@ -86,11 +104,12 @@ def test_non_member_gets_404_on_get_and_delete(client, world):
 
     responses = [
         client.get(url, headers=outsider),
+        client.patch(url, json={"version": 1, "title": "x"}, headers=outsider),
         client.delete(url, headers=outsider),
     ]
     missing = client.get(f"{API}/notes/999999", headers=outsider)
 
-    assert [r.status_code for r in responses] == [404, 404]
+    assert [r.status_code for r in responses] == [404, 404, 404]
     assert all(r.json() == missing.json() for r in responses)
     still_there = client.get(url, headers=auth(owner_token))
     assert still_there.json()["data"]["version"] == 1

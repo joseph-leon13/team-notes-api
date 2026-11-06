@@ -2,7 +2,14 @@
 
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from team_notes_api.schemas.common import RequestModel, UTCTimestamp
 
@@ -37,6 +44,38 @@ class NoteCreate(RequestModel):
     @classmethod
     def _normalize_tags(cls, value: list[str]) -> list[str]:
         return normalize_tags(value)
+
+
+class NoteUpdate(RequestModel):
+    """Body of ``PATCH /notes/{note_id}``.
+
+    ``version`` is the version the client last read; the edit only applies if it is
+    still current. At least one editable field must be present, and none may be null.
+    """
+
+    version: int = Field(ge=1)
+    title: Title | None = None
+    body: Body | None = None
+    tags: Tags | None = None
+
+    @field_validator("tags")
+    @classmethod
+    def _normalize_tags(cls, value: list[str] | None) -> list[str] | None:
+        return normalize_tags(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def _require_an_editable_field(self) -> "NoteUpdate":
+        editable = self.model_fields_set & {"title", "body", "tags"}
+        if not editable:
+            raise ValueError("provide at least one of: title, body, tags")
+        for field in editable:
+            if getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
+
+    def changes(self) -> dict[str, Any]:
+        """Return the editable fields the client actually sent."""
+        return {field: getattr(self, field) for field in self.model_fields_set - {"version"}}
 
 
 class NoteOut(BaseModel):

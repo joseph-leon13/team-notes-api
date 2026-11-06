@@ -9,7 +9,7 @@ from fastapi import APIRouter, Response, status
 from team_notes_api.api.deps import CurrentUser
 from team_notes_api.core.db import SessionDep
 from team_notes_api.schemas.common import Envelope, error_responses
-from team_notes_api.schemas.notes import NoteCreate, NoteOut
+from team_notes_api.schemas.notes import NoteCreate, NoteOut, NoteUpdate
 from team_notes_api.services import notes as note_service
 
 router = APIRouter(prefix="/notes", tags=["notes"])
@@ -45,6 +45,29 @@ def get_note(note_id: int, session: SessionDep, user: CurrentUser) -> Envelope[N
     """Return a note from one of the caller's teams. Anything else is 404."""
     visible = note_service.get_note_for_user(session, note_id, user)
     return Envelope(data=NoteOut.model_validate(visible.note))
+
+
+@router.patch(
+    "/{note_id}",
+    summary="Edit a note (optimistic concurrency)",
+    responses=error_responses(
+        401,
+        404,
+        409,
+        422,
+        s409="`version` is stale (`version_conflict`); `details.current_version` has the latest.",
+    ),
+)
+def update_note(
+    note_id: int, payload: NoteUpdate, session: SessionDep, user: CurrentUser
+) -> Envelope[NoteOut]:
+    """Edit title, body and/or tags. Send the `version` you last read.
+
+    On success the version increments (a tags-only edit too). If someone edited the note
+    since, nothing is changed and you get 409 with the current version.
+    """
+    note = note_service.update_note(session, note_id, user, payload.version, payload.changes())
+    return Envelope(data=NoteOut.model_validate(note))
 
 
 @router.delete(
