@@ -5,6 +5,7 @@ module never touches the database.
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from team_notes_api import models  # noqa: F401  (registers tables on Base.metadata)
@@ -33,6 +34,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.session_factory = build_session_factory(engine)
     register_error_handlers(app)
+    if settings.cors_origin_list:
+        # Explicit origins only (never "*"); bearer tokens travel in a header, so no
+        # cookies/credentials are needed for cross-origin calls.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origin_list,
+            allow_methods=["GET", "POST", "PATCH", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+            expose_headers=["Location"],
+        )
     app.include_router(api_v1.router)
 
     @app.get("/health", tags=["health"], summary="Liveness and database check")
