@@ -60,8 +60,8 @@ Settings are loaded and validated by **pydantic-settings**, FastAPI's recommende
 |---|---|---|
 | `NOTES_DATABASE_URL` | `sqlite:///./notes.db` | Any SQLAlchemy URL |
 | `NOTES_DEFAULT_PAGE_SIZE` | `20` | Page size when `limit` is omitted |
-| `NOTES_MAX_PAGE_SIZE` | `100` | Upper bound for `limit` |
-| `NOTES_CORS_ORIGINS` | *(empty)* | Comma-separated browser origins allowed to call the API. Empty means no cross-origin access, and `*` is never used |
+| `NOTES_MAX_PAGE_SIZE` | `100` | Lowers the page-size cap: a larger `limit` is clamped to it. The API itself rejects `limit` above 100 (422), so this can only reduce the cap, never raise it |
+| `NOTES_CORS_ORIGINS` | *(empty)* | Comma-separated browser origins allowed to call the API. Empty means no cross-origin access. List explicit origins; don't use `*` |
 
 **One image, many environments:** dev, staging and prod differ only in these values, following the twelve-factor convention. Real environment variables override `.env`, so Docker, compose and CI can inject per-environment values. The service holds no secrets today.
 
@@ -74,9 +74,9 @@ uv run lint-imports                            # architecture contracts (see bel
 ```
 
 **import-linter** enforces the layering. These contracts fail the check if broken:
-- `api` → `services` → `schemas` / `models`, never upward;
-- `services.policy` stays pure: no database, models or API imports;
-- `models` never import `schemas`.
+- `api` → `services` → `schemas` / `models`, never upward (`core` is shared infrastructure, outside the layers);
+- `services.policy` stays pure: no database, models, API or other service imports;
+- `models` never import `schemas`, `services` or `api`.
 
 ## Schema migrations
 
@@ -94,6 +94,8 @@ uv run alembic downgrade -1                           # step back one revision
 - The test suite itself builds its throwaway databases from the models for speed. The drift test is what keeps that honest.
 
 ## Walkthrough (curl)
+
+With the API running (see Quick start), this script needs `curl` and [`jq`](https://jqlang.org/). It creates two users and a team, then shows the 409 conflict when two people edit the same version of a note.
 
 ```bash
 API=http://127.0.0.1:8000/api/v1
@@ -143,7 +145,7 @@ All endpoints except `/health` live under `/api/v1`. Authenticated endpoints tak
 | POST | `/teams` | any user | Create a team (caller becomes owner) |
 | GET | `/teams` | any user | Teams I belong to |
 | GET | `/teams/{team_id}` | member | Team with its members |
-| POST | `/teams/{team_id}/members` | owner | Add a member by email |
+| POST | `/teams/{team_id}/members` | owner | Add a member by email, optionally with `role` `owner` or `member` (default) |
 | DELETE | `/teams/{team_id}/members/{user_id}` | owner, or self | Remove a member (the last owner cannot be removed) |
 | POST | `/teams/{team_id}/notes` | member | Create a note (`201`, `Location` header) |
 | GET | `/teams/{team_id}/notes` | member | List notes: `?q=` search, `?tag=` (repeatable, AND), `?limit=`, `?cursor=` |
@@ -151,7 +153,7 @@ All endpoints except `/health` live under `/api/v1`. Authenticated endpoints tak
 | PATCH | `/notes/{note_id}` | member | Edit; requires the `version` you edited from |
 | DELETE | `/notes/{note_id}` | creator or owner | Delete a note (`204`) |
 
-**Responses** are `{"data": ..., "meta": {...}}`. **Errors** always use one envelope, including unknown routes, wrong methods and validation failures: `{"error": {"code": "...", "message": "...", "details": {...}}}`.
+**Responses:** all `/api/v1` responses are `{"data": ..., "meta": {...}}`, except `204 No Content`; `/health` returns a bare `{"status": "ok"}`. **Errors** always use one envelope, including unknown routes, wrong methods and validation failures: `{"error": {"code": "...", "message": "...", "details": {...}}}`.
 
 | Status | When |
 |---|---|
@@ -159,19 +161,25 @@ All endpoints except `/health` live under `/api/v1`. Authenticated endpoints tak
 | 403 `forbidden` | You can see the resource but your role does not allow the action |
 | 404 `not_found` | It does not exist, **or** it belongs to a team you are not in |
 | 409 `conflict` / `version_conflict` / `last_owner` | Duplicate, stale edit, or removing the last owner |
+| 405 `method_not_allowed` | Wrong HTTP method for an existing path |
 | 422 `validation_error` / `invalid_cursor` | Bad input |
+| 500 `internal_error` | Unexpected failure; logged server-side, and no details are leaked to the client |
 
 ## Project layout
 
 ```
 pyproject.toml       project metadata, dependencies, ruff / pytest / import-linter config
-uv.lock              exact pinned dependency versions (requirements.txt is exported from it)
+uv.lock              exact pinned dependency versions
+requirements.txt     pip fallback, exported from uv.lock
+.python-version      Python 3.12 for uv
 alembic.ini          Alembic configuration (the database URL comes from NOTES_DATABASE_URL)
 Dockerfile           image: uv.lock-pinned, non-root, runs migrations then the API
 compose.yaml         docker compose service + /data volume (compose.dev.yaml adds live reload)
 .env.example         every NOTES_* setting with its default
+.dockerignore, .gitignore
 migrations/          Alembic schema migrations
   env.py             reads the app's settings and models' metadata (SQLite batch mode)
+  script.py.mako     template for new revisions
   versions/          versioned schema revisions (0001: initial schema)
 src/team_notes_api/
   main.py            app factory: settings, database, routers, error handlers
@@ -188,7 +196,9 @@ src/team_notes_api/
   services/          business logic and all queries; transactions commit here
     policy.py        pure role rules (who may edit / delete / manage members)
   models/            SQLAlchemy models: users, teams, memberships, notes, tags
+    types.py         UTCDateTime column type (timezone-aware UTC in and out)
   schemas/           Pydantic request/response models (kept separate from ORM models)
+    common.py        success / error envelopes and pagination meta
 tests/
   conftest.py        fresh app + temp SQLite file per test; factories for users, teams, notes
   unit/              pure logic: policy truth table, token security, cursors, migration drift
@@ -203,14 +213,14 @@ Routers only parse input, call a service and wrap the result. Services own the r
 
 ```mermaid
 flowchart LR
-    C[Client] -->|"HTTP + Bearer token"| R["Router<br/>(api/routers)"]
+    C[Client] -->|"HTTP + Bearer token"| R["Router<br/>(api/v1)"]
     R -->|"CurrentUser dependency<br/>hash token, look up user"| A[(users)]
     R -->|validated Pydantic model| S["Service<br/>(services/)"]
     S -->|"role decision"| P["policy.py<br/>(pure functions)"]
     S -->|"SQLAlchemy 2.0<br/>one transaction, commit"| DB[(SQLite)]
     S -->|domain object| R
     R -->|"{data, meta}"| C
-    R -.->|"AppError / validation / HTTP errors"| E["errors.py<br/>global handlers"]
+    R -.->|"AppError / validation / HTTP errors"| E["core/errors.py<br/>global handlers"]
     E -.->|"{error: {code, message, details}}"| C
 ```
 
@@ -239,7 +249,7 @@ erDiagram
     MEMBERSHIPS {
         int id PK
         int team_id FK "UNIQUE(team_id, user_id)"
-        int user_id FK
+        int user_id FK "INDEX (my teams lookup)"
         string role "CHECK owner | member"
         datetime created_at
     }
@@ -256,7 +266,7 @@ erDiagram
     }
     NOTE_TAGS {
         int note_id FK "ON DELETE CASCADE"
-        string tag "PK(note_id, tag)"
+        string tag "PK(note_id, tag), INDEX for tag filters"
     }
 ```
 
@@ -277,7 +287,7 @@ flowchart TD
 
 - **404, not 403, for other teams' notes.** A 403 would confirm the note exists. Inside your own team, a role failure (for example deleting someone else's note as a non-owner) returns 403, because you can already see the note.
 - **Request models reject unknown fields** (`extra="forbid"`). A PATCH cannot smuggle in `team_id` or `created_by`.
-- **The rule is tested as a matrix and gated.** `tests/test_authz_matrix.py` checks every route against no token, a bad token, a non-member, a member and an owner. A second test walks the app's routes and **fails if a new endpoint is not covered** by the matrix or explicitly marked public. A future endpoint cannot quietly skip the check.
+- **The rule is tested as a matrix and gated.** `tests/authz/test_authz_matrix.py` checks every route against no token, a bad token, a non-member, a member and an owner. A second test walks the app's routes and **fails if a new endpoint is not covered** by the matrix or explicitly marked public, so a future endpoint cannot quietly skip the check. A third scans the source and fails if anything outside `services/notes.py` queries notes, which backs the "only one way to load a note" claim.
 
 ### 2. Shared notes need protection from silent overwrites
 
@@ -306,7 +316,7 @@ sequenceDiagram
 ```
 
 - If no row matched, the note is re-checked: it is either gone (404) or someone saved first (**409** with the `current_version`, so the client can refetch and retry).
-- Doing the check inside the `UPDATE` rather than read-compare-write means two simultaneous edits cannot both pass. A test races 2, 3 and 4 threads that all edit from the same version and asserts exactly one 200, with every other thread getting 409. Swapping the conditional `UPDATE` for read-check-write makes that test fail.
+- Doing the check inside the `UPDATE` rather than read-compare-write means two simultaneous edits cannot both pass. A test races 2, 3 and 4 threads that all edit from the same version and asserts exactly one 200, with every other thread getting 409. Swapping the conditional `UPDATE` for read-check-write makes the 3- and 4-thread cases fail. The 2-thread case alone can miss the race, which is why the test uses several sizes.
 - **Body field vs `If-Match`:** the version travels in the JSON body because it is explicit, visible in the API docs and trivial to test. The HTTP-idiomatic alternative is an `ETag` with `If-Match` (412/428); mapping to it would be a thin adapter.
 - **Not considered:** locking (bad for a notes UI) and merging (out of scope).
 
@@ -337,8 +347,15 @@ sequenceDiagram
 
 ## Scope: what I deliberately left out
 
-- **Real authentication** (see above).
-- **Real-time collaboration, attachments, note history, per-note sharing outside a team, team deletion, rate limiting.**
+The time box went to the core: team isolation, safe concurrent edits and listing. These were cut on purpose:
+
+- **Real authentication** (see above). The stand-in token keeps the access rules real without building a login system.
+- **Real-time collaboration.** Clients poll for now; the design is in "What I'd add".
+- **Note history, restore and soft delete.** Deletes are permanent. The `version` counter is the hook a history table would hang off.
+- **Sharing a note outside its team.** Teams are the only sharing boundary, which keeps the authorization model to a single rule.
+- **Team and account management beyond the basics.** There is no endpoint to rename or delete a team, change a member's role, or edit or delete your own user.
+- **Attachments and rich content.** Note bodies are plain text (Markdown works as plain text).
+- **Rate limiting and abuse protection.**
 
 ## What I'd change or add with more time
 
@@ -365,4 +382,10 @@ sequenceDiagram
 
 ## How AI was used
 
-This challenge allowed AI tools, and I used them as a pair programmer for scaffolding, test generation and review. The design decisions above (isolation strategy, concurrency model, pagination approach, scope cuts) were mine. Correctness claims are backed by the tests in this repository, which I ran.
+This challenge allowed AI tools. I built it with **Khimaira**, my own multi-agent orchestration platform for Claude Code. The process was:
+
+1. **Design, then adversarial review.** I set the requirements and the design: stack, scope, project layout, API versioning, uv, Alembic, Docker and the auth approach. A separate review agent then attacked the plan before any code existed. That review shaped the authorization matrix, the atomic versioned `UPDATE` and the keyset pagination.
+2. **Implementation by a builder agent,** working in small, individually green commits. That is the history you see.
+3. **Independent verification.** A separate reviewer agent audited the code from a fresh clone and held the submission back until gaps were fixed. One gap was that the concurrency test was sequential, so it now races real threads.
+
+The tests check the claims in this README. The mutation-checked tests are the access matrix, the concurrency race, the layering contracts and the migration drift. I also exercised every endpoint by hand against the running service and the Docker container, and followed this README step by step from a fresh clone.
