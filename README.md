@@ -164,6 +164,15 @@ All endpoints except `/health` live under `/api/v1`. Authenticated endpoints tak
 ## Project layout
 
 ```
+pyproject.toml       project metadata, dependencies, ruff / pytest / import-linter config
+uv.lock              exact pinned dependency versions (requirements.txt is exported from it)
+alembic.ini          Alembic configuration (the database URL comes from NOTES_DATABASE_URL)
+Dockerfile           image: uv.lock-pinned, non-root, runs migrations then the API
+compose.yaml         docker compose service + /data volume (compose.dev.yaml adds live reload)
+.env.example         every NOTES_* setting with its default
+migrations/          Alembic schema migrations
+  env.py             reads the app's settings and models' metadata (SQLite batch mode)
+  versions/          versioned schema revisions (0001: initial schema)
 src/team_notes_api/
   main.py            app factory: settings, database, routers, error handlers
   core/              cross-cutting infrastructure
@@ -180,8 +189,12 @@ src/team_notes_api/
     policy.py        pure role rules (who may edit / delete / manage members)
   models/            SQLAlchemy models: users, teams, memberships, notes, tags
   schemas/           Pydantic request/response models (kept separate from ORM models)
-migrations/          Alembic environment + versioned schema revisions
-tests/               behaviour tests per area + an authorization matrix
+tests/
+  conftest.py        fresh app + temp SQLite file per test; factories for users, teams, notes
+  unit/              pure logic: policy truth table, token security, cursors, migration drift
+  api/               behaviour through HTTP: users, teams, notes CRUD / concurrency / listing,
+                     errors, CORS, health
+  authz/             authorization matrix (every route x every actor) + route-coverage gate
 ```
 
 Routers only parse input, call a service and wrap the result. Services own the rules, the queries and the transaction. `policy.py` holds the role decisions as pure functions, so they are unit-tested as a truth table.
