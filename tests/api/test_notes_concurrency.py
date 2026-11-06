@@ -1,7 +1,11 @@
 """Optimistic concurrency on note edits: one atomic versioned UPDATE, 409 on stale versions."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from conftest import API, auth, make_note, make_team, make_user
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -41,6 +45,40 @@ def test_two_edits_of_the_same_version_yield_exactly_one_success(client, note_ct
     assert sorted([first.status_code, second.status_code]) == [200, 409]
     current = client.get(f"{API}/notes/{note['id']}", headers=auth(token)).json()["data"]
     assert (current["body"], current["version"]) == ("first", 2)
+
+
+@pytest.mark.parametrize("racers", [2, 3, 4])
+def test_racing_edits_of_the_same_version_yield_exactly_one_success(client, note_ctx, racers):
+    """Real concurrency: N threads released together by a barrier, each with its own
+    TestClient over the same app and temp-file SQLite database, all PATCH version 1.
+
+    The conditional UPDATE is the only arbiter: SQLite serializes the writers (WAL +
+    busy_timeout), the first to commit matches ``version = 1``, and every later one
+    matches zero rows and must get 409, never a 500 or a second 200.
+    """
+    token, note = note_ctx
+    barrier = threading.Barrier(racers)
+
+    def edit(index: int):
+        with TestClient(client.app) as racer:
+            barrier.wait(timeout=10)
+            return patch(racer, token, note["id"], {"version": 1, "body": f"racer {index}"})
+
+    with ThreadPoolExecutor(max_workers=racers) as pool:
+        responses = list(pool.map(edit, range(racers)))
+
+    statuses = sorted(r.status_code for r in responses)
+    assert statuses == [200] + [409] * (racers - 1), [r.text for r in responses]
+    for conflict in (r for r in responses if r.status_code == 409):
+        assert conflict.json()["error"] == {
+            "code": "version_conflict",
+            "message": conflict.json()["error"]["message"],
+            "details": {"current_version": 2},
+        }
+    winner = next(r for r in responses if r.status_code == 200).json()["data"]
+    current = client.get(f"{API}/notes/{note['id']}", headers=auth(token)).json()["data"]
+    assert current["version"] == 2
+    assert current["body"] == winner["body"]
 
 
 def test_tags_only_change_bumps_version_and_replaces_tags(client, note_ctx):
