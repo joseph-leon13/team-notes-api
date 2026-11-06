@@ -168,43 +168,71 @@ All endpoints except `/health` live under `/api/v1`. Authenticated endpoints tak
 ## Project layout
 
 ```
-pyproject.toml       project metadata, dependencies, ruff / pytest / import-linter config
-uv.lock              exact pinned dependency versions
-requirements.txt     pip fallback, exported from uv.lock
-.python-version      Python 3.12 for uv
-alembic.ini          Alembic configuration (the database URL comes from NOTES_DATABASE_URL)
-Dockerfile           image: uv.lock-pinned, non-root, runs migrations then the API
-compose.yaml         docker compose service + /data volume (compose.dev.yaml adds live reload)
-.env.example         every NOTES_* setting with its default
-.dockerignore, .gitignore
-migrations/          Alembic schema migrations
-  env.py             reads the app's settings and models' metadata (SQLite batch mode)
-  script.py.mako     template for new revisions
-  versions/          versioned schema revisions (0001: initial schema)
-src/team_notes_api/
-  main.py            app factory: settings, database, routers, error handlers
-  core/              cross-cutting infrastructure
-    config.py        settings (NOTES_* environment variables)
-    db.py            engine, SQLite pragmas, per-request session
-    errors.py        typed errors + the single error envelope + global handlers
-    security.py      token generation and hashing
-    roles.py         the owner/member role enum (shared by models and policy)
-  api/               thin HTTP layer
-    deps.py          shared CurrentUser and pagination dependencies (version-agnostic)
-    v1/              version 1 of the public API, mounted at /api/v1
-      users.py  teams.py  notes.py   one APIRouter per area
-  services/          business logic and all queries; transactions commit here
-    policy.py        pure role rules (who may edit / delete / manage members)
-  models/            SQLAlchemy models: users, teams, memberships, notes, tags
-    types.py         UTCDateTime column type (timezone-aware UTC in and out)
-  schemas/           Pydantic request/response models (kept separate from ORM models)
-    common.py        success / error envelopes and pagination meta
-tests/
-  conftest.py        fresh app + temp SQLite file per test; factories for users, teams, notes
-  unit/              pure logic: policy truth table, token security, cursors, migration drift
-  api/               behaviour through HTTP: users, teams, notes CRUD / concurrency / listing,
-                     errors, CORS, health
-  authz/             authorization matrix (every route x every actor) + route-coverage gate
+team-notes-api/
+├── src/team_notes_api/
+│   ├── main.py                    # app factory: settings, database, routers, error handlers
+│   ├── core/                      # cross-cutting infrastructure
+│   │   ├── config.py              # settings (NOTES_* environment variables, pydantic-settings)
+│   │   ├── db.py                  # engine, SQLite pragmas, per-request session
+│   │   ├── errors.py              # typed errors, the error envelope, global handlers
+│   │   ├── roles.py               # owner/member role enum (shared by models and policy)
+│   │   └── security.py            # token generation and hashing
+│   ├── api/                       # thin HTTP layer
+│   │   ├── deps.py                # CurrentUser and pagination dependencies (version-agnostic)
+│   │   └── v1/                    # public API v1, mounted at /api/v1 (one APIRouter per area)
+│   │       ├── users.py
+│   │       ├── teams.py
+│   │       └── notes.py
+│   ├── services/                  # business logic and all queries; transactions commit here
+│   │   ├── users.py
+│   │   ├── teams.py
+│   │   ├── notes.py               # the single note-loading authorization chokepoint
+│   │   └── policy.py              # pure role rules (edit / delete / manage members)
+│   ├── models/                    # SQLAlchemy 2.0 models
+│   │   ├── user.py
+│   │   ├── team.py                # Team, Membership
+│   │   ├── note.py                # Note, NoteTag
+│   │   └── types.py               # UTCDateTime column type
+│   └── schemas/                   # Pydantic request/response models (separate from ORM models)
+│       ├── common.py              # success / error envelopes, pagination meta
+│       ├── users.py
+│       ├── teams.py
+│       └── notes.py
+├── migrations/                    # Alembic schema migrations
+│   ├── env.py                     # reads app settings + model metadata (SQLite batch mode)
+│   ├── script.py.mako             # template for new revisions
+│   └── versions/
+│       └── 0001_initial_schema.py
+├── tests/
+│   ├── conftest.py                # fresh app + temp SQLite file per test; factories
+│   ├── unit/                      # pure logic, no HTTP
+│   │   ├── test_policy.py         # role-rule truth table
+│   │   ├── test_security.py       # token generation / hashing
+│   │   ├── test_cursor.py         # pagination cursor encode / decode
+│   │   └── test_migrations.py     # migrations vs models drift + downgrade/upgrade round trip
+│   ├── api/                       # behaviour through HTTP
+│   │   ├── test_health.py
+│   │   ├── test_users.py
+│   │   ├── test_teams.py
+│   │   ├── test_notes_crud.py
+│   │   ├── test_notes_concurrency.py   # threaded race: exactly one winner
+│   │   ├── test_notes_listing.py       # pagination, search, tags
+│   │   ├── test_errors.py              # error envelope on every status
+│   │   └── test_cors.py
+│   └── authz/
+│       └── test_authz_matrix.py   # every route x every actor + route-coverage gate
+├── pyproject.toml                 # metadata, dependencies, ruff / pytest / import-linter config
+├── uv.lock                        # exact pinned dependency versions
+├── requirements.txt               # pip fallback, exported from uv.lock
+├── alembic.ini                    # Alembic config (DB URL comes from NOTES_DATABASE_URL)
+├── Dockerfile                     # uv.lock-pinned, non-root, runs migrations then the API
+├── compose.yaml                   # docker compose: API + /data volume
+├── compose.dev.yaml               # dev override: live reload on ./src
+├── .env.example                   # every NOTES_* setting with its default
+├── .python-version                # Python 3.12 (for uv)
+├── .dockerignore
+├── .gitignore
+└── README.md
 ```
 
 Routers only parse input, call a service and wrap the result. Services own the rules, the queries and the transaction. `policy.py` holds the role decisions as pure functions, so they are unit-tested as a truth table.
