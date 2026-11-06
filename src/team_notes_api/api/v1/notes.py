@@ -4,16 +4,27 @@ Two routers, both tagged ``notes``: ``team_notes_router`` owns the team-scoped
 collection (``/teams/{team_id}/notes``), ``router`` owns single notes (``/notes/{id}``).
 """
 
-from fastapi import APIRouter, Response, status
+from typing import Annotated
 
-from team_notes_api.api.deps import CurrentUser
+from fastapi import APIRouter, Query, Response, status
+
+from team_notes_api.api.deps import CurrentUser, PageParams
 from team_notes_api.core.db import SessionDep
-from team_notes_api.schemas.common import Envelope, error_responses
-from team_notes_api.schemas.notes import NoteCreate, NoteOut, NoteUpdate
+from team_notes_api.schemas.common import Envelope, PageEnvelope, PageMeta, error_responses
+from team_notes_api.schemas.notes import MAX_TAG_LENGTH, NoteCreate, NoteOut, NoteUpdate
 from team_notes_api.services import notes as note_service
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 team_notes_router = APIRouter(prefix="/teams/{team_id}/notes", tags=["notes"])
+
+TagFilter = Annotated[
+    list[Annotated[str, Query(min_length=1, max_length=MAX_TAG_LENGTH)]],
+    Query(description="Repeatable; a note must carry every given tag (AND)."),
+]
+SearchQuery = Annotated[
+    str | None,
+    Query(max_length=100, description="Case-insensitive substring of title or body."),
+]
 
 
 @team_notes_router.post(
@@ -38,6 +49,39 @@ def create_note(
     )
     response.headers["Location"] = f"/api/v1/notes/{note.id}"
     return Envelope(data=NoteOut.model_validate(note))
+
+
+@team_notes_router.get(
+    "",
+    summary="List a team's notes",
+    responses=error_responses(
+        401, 404, 422, s422="Invalid parameter (`validation_error`) or cursor (`invalid_cursor`)."
+    ),
+)
+def list_notes(
+    team_id: int,
+    page: PageParams,
+    session: SessionDep,
+    user: CurrentUser,
+    q: SearchQuery = None,
+    tag: TagFilter = [],  # noqa: B006 (FastAPI copies defaults per request)
+) -> PageEnvelope[NoteOut]:
+    """List notes, most recently updated first, using keyset (cursor) pagination.
+
+    Pass `meta.next_cursor` back as `cursor` to get the next page; it is null on the last.
+    """
+    tags = [t.strip().lower() for t in tag]
+    result = note_service.list_notes(
+        session, team_id, user, limit=page.limit, cursor=page.cursor, q=q or None, tags=tags
+    )
+    return PageEnvelope(
+        data=[NoteOut.model_validate(note) for note in result.notes],
+        meta=PageMeta(
+            limit=page.limit,
+            next_cursor=result.next_cursor,
+            has_more=result.next_cursor is not None,
+        ),
+    )
 
 
 @router.get("/{note_id}", summary="Get a note", responses=error_responses(401, 404, 422))

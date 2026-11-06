@@ -1,16 +1,25 @@
-"""Notes: the authorization chokepoint, create/read/delete and versioned edits.
+"""Notes: the authorization chokepoint, CRUD, versioned edits and keyset listing.
 
 :func:`get_note_for_user` is the ONLY way to load a note by id. It joins ``notes`` to
 the caller's ``memberships`` row, so "no such note" and "note in a team you are not in"
 are the same empty result and the same 404: a note's existence never leaks.
 """
 
+import base64
+import binascii
+import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, insert, or_, select, tuple_, update
 from sqlalchemy.orm import Session, selectinload
 
-from team_notes_api.core.errors import ForbiddenError, NotFoundError, VersionConflictError
+from team_notes_api.core.errors import (
+    ForbiddenError,
+    InvalidCursorError,
+    NotFoundError,
+    VersionConflictError,
+)
 from team_notes_api.models import Membership, Note, NoteTag, User
 from team_notes_api.models.types import utc_now
 from team_notes_api.services import policy
@@ -23,6 +32,14 @@ class VisibleNote:
 
     note: Note
     role: str
+
+
+@dataclass(frozen=True)
+class NotePage:
+    """One page of a keyset-paginated listing."""
+
+    notes: list[Note]
+    next_cursor: str | None
 
 
 def get_note_for_user(session: Session, note_id: int, user: User) -> VisibleNote:
@@ -112,3 +129,68 @@ def delete_note(session: Session, note_id: int, user: User) -> None:
         raise ForbiddenError("Only the note's creator or a team owner can delete it.")
     session.delete(visible.note)
     session.commit()
+
+
+def encode_cursor(note: Note) -> str:
+    """Encode a note's sort key ``(updated_at, id)`` as an opaque base64url cursor."""
+    payload = json.dumps({"u": note.updated_at.isoformat(), "i": note.id}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+
+
+def decode_cursor(cursor: str) -> tuple[datetime, int]:
+    """Decode a cursor from :func:`encode_cursor`, or raise 422 ``invalid_cursor``."""
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+        payload = json.loads(raw)
+        updated_at = datetime.fromisoformat(payload["u"])
+        note_id = payload["i"]
+    except (binascii.Error, ValueError, TypeError, KeyError) as exc:
+        raise InvalidCursorError() from exc
+    if not isinstance(note_id, int) or isinstance(note_id, bool) or updated_at.tzinfo is None:
+        raise InvalidCursorError()
+    return updated_at.astimezone(UTC), note_id
+
+
+def list_notes(
+    session: Session,
+    team_id: int,
+    user: User,
+    *,
+    limit: int,
+    cursor: str | None = None,
+    q: str | None = None,
+    tags: list[str] | None = None,
+) -> NotePage:
+    """List a team's notes, newest first, with keyset pagination.
+
+    Sort is ``(updated_at DESC, id DESC)``; ``id`` breaks ties so pages never overlap or
+    skip rows. Each tag adds one EXISTS (AND semantics, no row duplication), and ``q``
+    is a case-insensitive substring match with ``%``/``_`` escaped.
+    """
+    membership = get_membership_or_404(session, team_id, user)
+    if not policy.can_read_note(membership.role):
+        raise ForbiddenError()
+
+    stmt = select(Note).where(Note.team_id == team_id)
+    for tag in tags or []:
+        stmt = stmt.where(
+            select(NoteTag.note_id).where(NoteTag.note_id == Note.id, NoteTag.tag == tag).exists()
+        )
+    if q:
+        stmt = stmt.where(
+            or_(Note.title.icontains(q, autoescape=True), Note.body.icontains(q, autoescape=True))
+        )
+    if cursor is not None:
+        updated_at, note_id = decode_cursor(cursor)
+        stmt = stmt.where(tuple_(Note.updated_at, Note.id) < (updated_at, note_id))
+
+    rows = list(
+        session.scalars(
+            stmt.options(selectinload(Note.tags))
+            .order_by(Note.updated_at.desc(), Note.id.desc())
+            .limit(limit + 1)
+        )
+    )
+    has_more = len(rows) > limit
+    notes = rows[:limit]
+    return NotePage(notes=notes, next_cursor=encode_cursor(notes[-1]) if has_more else None)
