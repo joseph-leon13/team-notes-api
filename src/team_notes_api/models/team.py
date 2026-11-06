@@ -33,7 +33,7 @@ class Membership(Base):
         UniqueConstraint("team_id", "user_id", name="uq_memberships_team_user"),
         CheckConstraint(
             "role IN ({})".format(", ".join(f"'{role.value}'" for role in Role)),
-            name="ck_memberships_role",
+            name="role",  # rendered as ck_memberships_role by the naming convention
         ),
     )
 

@@ -4,12 +4,24 @@ from collections.abc import Iterator
 from typing import Annotated
 
 from fastapi import Depends, Request
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, MetaData, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+NAMING_CONVENTION = {
+    "pk": "pk_%(table_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "ix": "ix_%(column_0_label)s",
+}
+"""Deterministic constraint names, so migrations can target them (SQLite batch mode
+cannot drop or alter an unnamed constraint)."""
 
 
 class Base(DeclarativeBase):
     """Declarative base for every ORM model."""
+
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
 def build_engine(database_url: str) -> Engine:

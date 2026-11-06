@@ -8,22 +8,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from team_notes_api import models  # noqa: F401  (registers tables on Base.metadata)
 from team_notes_api.api import v1 as api_v1
 from team_notes_api.core.config import Settings, get_settings
-from team_notes_api.core.db import Base, SessionDep, build_engine, build_session_factory
+from team_notes_api.core.db import SessionDep, build_engine, build_session_factory
 from team_notes_api.core.errors import register_error_handlers
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Create a configured FastAPI application.
 
-    Tables are created on startup (``create_all``); a production deployment would use
-    migrations instead (see README, "What I'd change").
+    The app never creates or alters tables: the schema comes from Alembic
+    (``alembic upgrade head``), which reads the same ``NOTES_DATABASE_URL``.
     """
     settings = settings or get_settings()
     engine = build_engine(settings.database_url)
-    Base.metadata.create_all(engine)
 
     app = FastAPI(
         title="Team Notes API",

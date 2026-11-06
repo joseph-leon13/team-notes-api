@@ -13,7 +13,9 @@ directory on ``sys.path``, since ``tests/`` has no ``__init__.py``).
 import pytest
 from fastapi.testclient import TestClient
 
+from team_notes_api import models  # noqa: F401  (registers tables on Base.metadata)
 from team_notes_api.core.config import Settings
+from team_notes_api.core.db import Base
 from team_notes_api.main import create_app
 
 API = "/api/v1"
@@ -21,9 +23,15 @@ API = "/api/v1"
 
 @pytest.fixture
 def client(tmp_path):
-    """A TestClient for a fresh app whose SQLite database lives in ``tmp_path``."""
+    """A TestClient for a fresh app whose SQLite database lives in ``tmp_path``.
+
+    The schema is built straight from the models for speed; that it matches the
+    Alembic migrations is enforced by ``tests/unit/test_migrations.py``.
+    """
     settings = Settings(database_url=f"sqlite:///{tmp_path / 'test.db'}")
-    with TestClient(create_app(settings)) as test_client:
+    app = create_app(settings)
+    Base.metadata.create_all(app.state.engine)
+    with TestClient(app) as test_client:
         yield test_client
 
 
