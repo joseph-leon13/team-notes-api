@@ -1,21 +1,14 @@
-"""The ``Team`` and ``Membership`` models, and the ``Role`` a member holds."""
+"""The ``Team`` and ``Membership`` models."""
 
 from datetime import datetime
-from enum import StrEnum
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from team_notes_api.core.db import Base
+from team_notes_api.core.roles import Role
 from team_notes_api.models.types import UTCDateTime, utc_now
 from team_notes_api.models.user import User
-
-
-class Role(StrEnum):
-    """A member's role inside one team."""
-
-    OWNER = "owner"
-    MEMBER = "member"
 
 
 class Team(Base):
@@ -36,7 +29,13 @@ class Membership(Base):
     """A user's membership in a team; the unit every authorization check joins on."""
 
     __tablename__ = "memberships"
-    __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_memberships_team_user"),)
+    __table_args__ = (
+        UniqueConstraint("team_id", "user_id", name="uq_memberships_team_user"),
+        CheckConstraint(
+            "role IN ({})".format(", ".join(f"'{role.value}'" for role in Role)),
+            name="ck_memberships_role",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     team_id: Mapped[int] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"))
