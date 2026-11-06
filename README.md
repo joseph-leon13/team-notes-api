@@ -318,7 +318,7 @@ sequenceDiagram
 - **Integer IDs are public.** Enumeration does not leak anything, because a note in another team returns the same 404 as a missing one. UUIDs would hide counts.
 - **Team and member lists are not paginated,** on the assumption of small teams. Note lists are.
 - **`limit` above 100 is rejected (422),** not silently clamped.
-- **Email is validated by shape only** (`local@domain.tld`, normalised to lower case). No verification email is sent.
+- **Email is syntax-validated, not verified.** Pydantic's `EmailStr` (via `email-validator`) checks the format without DNS lookups (and caps addresses at 254 characters, per the RFC), and addresses are normalised to lower case. No verification email is sent, so ownership of an address is not proven.
 - **Search case-folding is ASCII-only,** which is SQLite's `LIKE`.
 - **403 cannot happen on note read, create or edit,** because any team member may do those. 403 appears for deletes by non-creator members and for member management by non-owners.
 
